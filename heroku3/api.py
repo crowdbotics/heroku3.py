@@ -7,27 +7,30 @@ heroku3.api
 This module provides the basic API interface for Heroku.
 """
 
-import json
 import sys
+import json
 from pprint import pprint  # noqa
 
+# Third party libraries
 import requests
 from requests.exceptions import HTTPError
 
-from .helpers import is_collection
+# Project libraries
 from .models import Plan, RateLimit
-from .models.account import Account
-from .models.account.feature import AccountFeature
-from .models.addon import Addon
+from .helpers import is_collection
 from .models.app import App
-from .models.configvars import ConfigVars
-from .models.dyno import Dyno
-from .models.invoice import Invoice
 from .models.key import Key
-from .models.logsession import LogSession
-from .models.oauth import OAuthAuthorization, OAuthClient, OAuthToken
 from .rendezvous import Rendezvous
 from .structures import KeyedListResource, SSHKeyListResource
+from .models.dyno import Dyno
+from .models.addon import Addon
+from .models.oauth import OAuthToken, OAuthClient, OAuthAuthorization
+from .models.account import Account
+from .models.invoice import Invoice
+from .models.app_setup import AppSetup
+from .models.configvars import ConfigVars
+from .models.logsession import LogSession
+from .models.account.feature import AccountFeature
 
 if sys.version_info > (3, 0):
     from urllib.parse import quote
@@ -36,10 +39,7 @@ else:
 
 
 HEROKU_URL = "https://api.heroku.com"
-HEROKU_HEADERS = {
-    "Accept": "application/vnd.heroku+json; version=3.cedar-acm",
-    "Content-Type": "application/json",
-}
+HEROKU_HEADERS = {"Accept": "application/vnd.heroku+json; version=3.cedar-acm", "Content-Type": "application/json"}
 
 
 class RateLimitExceeded(Exception):
@@ -197,8 +197,7 @@ class HerokuCore(object):
 
         if r.status_code == 422:
             http_error = HTTPError(
-                "%s - %s Client Error: %s"
-                % (self._last_request_id, r.status_code, r.content.decode("utf-8"))
+                "%s - %s Client Error: %s" % (self._last_request_id, r.status_code, r.content.decode("utf-8"))
             )
             http_error.response = r
             raise http_error
@@ -211,7 +210,7 @@ class HerokuCore(object):
                 )
             )
 
-        if (not str(r.status_code).startswith("2")) and (not r.status_code in [304]):
+        if (not str(r.status_code).startswith("2")) and (r.status_code not in [304]):
             pass
         r.raise_for_status()
         return r
@@ -247,13 +246,7 @@ class HerokuCore(object):
 
         return self._process_items(
             self._get_data(
-                resource,
-                params=params,
-                legacy=legacy,
-                order_by=order_by,
-                limit=limit,
-                valrange=valrange,
-                sort=sort,
+                resource, params=params, legacy=legacy, order_by=order_by, limit=limit, valrange=valrange, sort=sort
             ),
             obj,
             map=map,
@@ -272,14 +265,7 @@ class HerokuCore(object):
     ):
 
         r = self._http_resource(
-            "GET",
-            resource,
-            params=params,
-            legacy=legacy,
-            order_by=order_by,
-            limit=limit,
-            valrange=valrange,
-            sort=sort,
+            "GET", resource, params=params, legacy=legacy, order_by=order_by, limit=limit, valrange=valrange, sort=sort
         )
 
         items = self._resource_deserialize(r.content.decode("utf-8"))
@@ -287,18 +273,12 @@ class HerokuCore(object):
             # We have unexpected chunked response - deal with it
             valrange = r.headers["Next-Range"]
             print(
-                "Warning Response was chunked, Loading the next Chunk using the following next-range header returned by Heroku '{0}'. WARNING - This breaks randomly depending on your order_by name. I think it's only guarenteed to work with id's - Looks to be a Heroku problem".format(
+                "Warning Response was chunked, Loading the next Chunk using the following next-range header returned by Heroku '{0}'. WARNING - This breaks randomly depending on your order_by name. I think it's only guarenteed to work with id's - Looks to be a Heroku problem".format(  # noqa
                     valrange
                 )
-            )
+            )  # noqa
             new_items = self._get_data(
-                resource,
-                params=params,
-                legacy=legacy,
-                order_by=order_by,
-                limit=limit,
-                valrange=valrange,
-                sort=sort,
+                resource, params=params, legacy=legacy, order_by=order_by, limit=limit, valrange=valrange, sort=sort
             )
             items.extend(new_items)
 
@@ -308,10 +288,10 @@ class HerokuCore(object):
 
         if not isinstance(d_items, list):
             print(
-                "Warning, Response for '{0}' was of type {1} - I was expecting a 'list'. This could mean the api has changed its response type for this request.".format(
-                    obj, type(d_items)
+                "Warning, Response for '{0}' was of type {1} - I was expecting a 'list'. This could mean the api has changed its response type for this request.".format(  # noqa
+                    obj, type(d_items)  # noqa
                 )
-            )
+            )  # noqa
             if isinstance(d_items, dict):
                 print("As it's a dict, I'll try to process it anyway")
                 return self._process_item(d_items, obj, **kwargs)
@@ -338,19 +318,38 @@ class Heroku(HerokuCore):
     def __repr__(self):
         return "<heroku-client at 0x%x>" % (id(self))
 
+    def create_appsetup(self, source_blob, overrides=None, app=None):
+        """
+        Creates an app-setup
+        """
+
+        assert "url" in source_blob
+
+        payload = {"source_blob": source_blob}
+        if overrides:
+            payload.update({"overrides": overrides})
+
+        if app:
+            payload.update({"app": app})
+
+        r = self._http_resource(method="POST", resource=("app-setups",), data=self._resource_serialize(payload))
+        r.raise_for_status()
+        item = self._resource_deserialize(r.content.decode("utf-8"))
+        pprint(item)
+        return AppSetup.new_from_dict(item, h=self)
+
+    def get_appsetup(self, app_setup_id):
+        return self._get_resource(("app-setups/{0:s}".format(app_setup_id)), AppSetup)
+
     def account(self):
         return self._get_resource(("account"), Account)
 
     def addons(self, app_id_or_name, **kwargs):
-        return self._get_resources(
-            resource=("apps", app_id_or_name, "addons"), obj=Addon, **kwargs
-        )
+        return self._get_resources(resource=("apps", app_id_or_name, "addons"), obj=Addon, **kwargs)
 
     def addon_services(self, id_or_name=None, **kwargs):
         if id_or_name is not None:
-            return self._get_resource(
-                ("addon-services/{0}".format(quote(id_or_name))), Plan
-            )
+            return self._get_resource(("addon-services/{0}".format(quote(id_or_name))), Plan)
         else:
             return self._get_resources(("addon-services"), Plan, **kwargs)
 
@@ -360,13 +359,7 @@ class Heroku(HerokuCore):
     def app(self, id_or_name):
         return self._get_resource(("apps/{0:s}".format(id_or_name)), App)
 
-    def create_app(
-        self,
-        name=None,
-        stack_id_or_name="cedar",
-        region_id_or_name=None,
-        organization=None,
-    ):
+    def create_app(self, name=None, stack_id_or_name="cedar", region_id_or_name=None, organization=None):
         """Creates a new app."""
 
         payload = {}
@@ -387,9 +380,7 @@ class Heroku(HerokuCore):
             payload["region"] = region_id_or_name
 
         try:
-            r = self._http_resource(
-                method="POST", resource=resource, data=self._resource_serialize(payload)
-            )
+            r = self._http_resource(method="POST", resource=resource, data=self._resource_serialize(payload))
             r.raise_for_status()
             item = self._resource_deserialize(r.content.decode("utf-8"))
             app = App.new_from_dict(item, h=self)
@@ -397,7 +388,7 @@ class Heroku(HerokuCore):
             if "Name is already taken" in str(e):
                 try:
                     app = self.app(name)
-                except:
+                except:  # noqa
                     raise
                 else:
                     print("Warning - {0:s}".format(str(e)))
@@ -406,9 +397,7 @@ class Heroku(HerokuCore):
         return app
 
     def keys(self, **kwargs):
-        return self._get_resources(
-            ("account/keys"), Key, map=SSHKeyListResource, **kwargs
-        )
+        return self._get_resources(("account/keys"), Key, map=SSHKeyListResource, **kwargs)
 
     def invoices(self, **kwargs):
         return self._get_resources(("account/invoices"), Invoice)
@@ -420,14 +409,10 @@ class Heroku(HerokuCore):
         return self._get_resources(("account/features"), AccountFeature, **kwargs)
 
     def oauthauthorization(self, oauthauthorization_id):
-        return self._get_resource(
-            ("oauth", "authorizations", oauthauthorization_id), OAuthAuthorization
-        )
+        return self._get_resource(("oauth", "authorizations", oauthauthorization_id), OAuthAuthorization)
 
     def oauthauthorizations(self, **kwargs):
-        return self._get_resources(
-            ("oauth", "authorizations"), OAuthAuthorization, **kwargs
-        )
+        return self._get_resources(("oauth", "authorizations"), OAuthAuthorization, **kwargs)
 
     def oauthauthorization_create(self, scope, oauthclient_id=None, description=None):
         """
@@ -442,9 +427,7 @@ class Heroku(HerokuCore):
             payload.update({"description": description})
 
         r = self._http_resource(
-            method="POST",
-            resource=("oauth", "authorizations"),
-            data=self._h._resource_serialize(payload),
+            method="POST", resource=("oauth", "authorizations"), data=self._h._resource_serialize(payload)
         )
         r.raise_for_status()
         item = self._resource_deserialize(r.content.decode("utf-8"))
@@ -454,9 +437,7 @@ class Heroku(HerokuCore):
         """
         Destroys the OAuthAuthorization with oauthauthorization_id
         """
-        r = self._http_resource(
-            method="DELETE", resource=("oauth", "authorizations", oauthauthorization_id)
-        )
+        r = self._http_resource(method="DELETE", resource=("oauth", "authorizations", oauthauthorization_id))
         r.raise_for_status()
         return r.ok
 
@@ -474,9 +455,7 @@ class Heroku(HerokuCore):
         payload = {"name": name, "redirect_uri": redirect_uri}
 
         r = self._http_resource(
-            method="POST",
-            resource=("oauth", "clients"),
-            data=self._h._resource_serialize(payload),
+            method="POST", resource=("oauth", "clients"), data=self._h._resource_serialize(payload)
         )
         r.raise_for_status()
         item = self._resource_deserialize(r.content.decode("utf-8"))
@@ -486,9 +465,7 @@ class Heroku(HerokuCore):
         """
         Destroys the OAuthClient with id oauthclient_id
         """
-        r = self._http_resource(
-            method="DELETE", resource=("oauth", "clients", oauthclient_id)
-        )
+        r = self._http_resource(method="DELETE", resource=("oauth", "clients", oauthclient_id))
         r.raise_for_status()
         return r.ok
 
@@ -516,11 +493,7 @@ class Heroku(HerokuCore):
         if grant:
             payload.update({"grant": grant})
 
-        r = self._http_resource(
-            method="POST",
-            resource=("oauth", "tokens"),
-            data=self._h._resource_serialize(payload),
-        )
+        r = self._http_resource(method="POST", resource=("oauth", "tokens"), data=self._h._resource_serialize(payload))
         r.raise_for_status()
         item = self._resource_deserialize(r.content.decode("utf-8"))
         return OAuthToken.new_from_dict(item, h=self)
@@ -544,9 +517,7 @@ class Heroku(HerokuCore):
             payload["env"] = env
 
         r = self._http_resource(
-            method="POST",
-            resource=("apps", appname, "dynos"),
-            data=self._resource_serialize(payload),
+            method="POST", resource=("apps", appname, "dynos"), data=self._resource_serialize(payload)
         )
 
         r.raise_for_status()
@@ -591,11 +562,7 @@ class Heroku(HerokuCore):
 
     def update_appconfig(self, app_id_or_name, config):
         payload = self._resource_serialize(config)
-        r = self._http_resource(
-            method="PATCH",
-            resource=("apps", app_id_or_name, "config-vars"),
-            data=payload,
-        )
+        r = self._http_resource(method="PATCH", resource=("apps", app_id_or_name, "config-vars"), data=payload)
 
         r.raise_for_status()
         item = self._resource_deserialize(r.content.decode("utf-8"))
@@ -616,9 +583,7 @@ class Heroku(HerokuCore):
             payload["lines"] = lines
 
         r = self._http_resource(
-            method="POST",
-            resource=("apps", app_id_or_name, "log-sessions"),
-            data=self._resource_serialize(payload),
+            method="POST", resource=("apps", app_id_or_name, "log-sessions"), data=self._resource_serialize(payload)
         )
 
         r.raise_for_status()
